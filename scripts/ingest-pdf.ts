@@ -1,5 +1,8 @@
 import * as dotenv from 'dotenv';
 dotenv.config({ path: '.env.local' });
+import { pipeline, env } from '@xenova/transformers';
+// Explicitly disable local models to force HF Hub download for the 768D model
+env.allowLocalModels = false;
 
 import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
@@ -13,24 +16,28 @@ const GOOGLE_API_KEY = process.env.GEMINI_API_KEY!;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_PRIVATE_KEY);
 
-async function getGeminiEmbedding(text: string): Promise<number[]> {
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${GOOGLE_API_KEY}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "models/gemini-embedding-001",
-        content: { parts: [{ text }] },
-      }),
-    }
-  );
-  const data = await response.json();
-  const embedding = data.embedding?.values;
-  if (!embedding) {
-    throw new Error(`Gemini API Error: ${JSON.stringify(data)}`);
+let extractorInstance: any = null;
+async function getLocalEmbeddingBatch(texts: string[]): Promise<number[][]> {
+  if (!extractorInstance) {
+    console.log("Loading Xenova/nomic-embed-text-v1.5 model... (may take a minute the first time)");
+    extractorInstance = await pipeline('feature-extraction', 'nomic-ai/nomic-embed-text-v1.5', { quantized: true });
   }
-  return embedding.slice(0, 768); // Force 768 to match vector DB schema
+
+  // Feature extraction output is a tensor, we use pooling and normalization automatically mapped
+  const output = await extractorInstance(texts, { pooling: 'mean', normalize: true });
+  
+  // output is a tensor, we must extract the float32 arrays
+  // shape is [batch_size, 768]
+  const embeddings: number[][] = [];
+  const batchSize = texts.length;
+  const dim = 768; // nomic outputs 768
+  
+  for (let i = 0; i < batchSize; i++) {
+    const chunkArray = Array.from(output.data.subarray(i * dim, (i + 1) * dim)) as number[];
+    embeddings.push(chunkArray);
+  }
+
+  return embeddings;
 }
 
 async function main() {
@@ -90,11 +97,10 @@ async function main() {
   for (let i = 0; i < allChunks.length; i += BATCH_SIZE) {
     const batch = allChunks.slice(i, i + BATCH_SIZE);
 
-    // Generate embeddings for the batch
-    const batchEmbeddings: number[][] = [];
-    for (const doc of batch) {
-      batchEmbeddings.push(await getGeminiEmbedding(doc.pageContent));
-    }
+    // Generate embeddings locally!
+    console.log(`Processing batch ${i / BATCH_SIZE + 1} locally...`);
+    const batchTexts = batch.map((doc) => doc.pageContent);
+    const batchEmbeddings = await getLocalEmbeddingBatch(batchTexts);
 
     const rowsToInsert = batch.map((doc, idx) => ({
       content: doc.pageContent,
@@ -108,6 +114,7 @@ async function main() {
     } else {
       console.log(`Inserted batch ${i / BATCH_SIZE + 1} / ${Math.ceil(allChunks.length / BATCH_SIZE)}`);
     }
+
   }
 
   console.log("Ingestion complete!");

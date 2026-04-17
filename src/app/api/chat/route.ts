@@ -4,6 +4,9 @@ import { GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI } from '@langchain
 import { PromptTemplate } from '@langchain/core/prompts';
 import { StringOutputParser } from '@langchain/core/output_parsers';
 import { IterableReadableStream } from '@langchain/core/utils/stream';
+import { pipeline, env } from '@xenova/transformers';
+
+env.allowLocalModels = false; // Always use HF Hub
 
 // Suppress the console warning from LangChain
 process.env.LANGCHAIN_TRACING_V2 = 'false';
@@ -25,9 +28,12 @@ function langChainStreamToReadableStream(stream: IterableReadableStream<any>) {
   });
 }
 
+// We lazily load the extractor globally to persist across requests during dev
+let extractorInstance: any = null;
+
 export async function POST(req: Request) {
   try {
-    const { message, sessionId, userId } = await req.json();
+    const { message, sessionId, userId, generateTitle } = await req.json();
 
     if (!message || !sessionId || !userId) {
       return NextResponse.json({ error: 'Missing required parameters' }, { status: 400 });
@@ -35,25 +41,37 @@ export async function POST(req: Request) {
 
     const supabase = await createClient();
 
-    // 1. Generate Embedding for the user query
-    async function getGeminiEmbedding(text: string): Promise<number[]> {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${process.env.GEMINI_API_KEY}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "models/gemini-embedding-001",
-            content: { parts: [{ text }] },
-          }),
+    // Optionally auto-generate a title rapidly in the background if this is the very first query
+    if (generateTitle) {
+      // Intentionally don't await this so it doesn't block the actual streaming response!
+      (async () => {
+        try {
+          const titleModel = new ChatGoogleGenerativeAI({
+            apiKey: process.env.GEMINI_API_KEY,
+            model: "gemini-2.5-flash", 
+            temperature: 0.3,
+          });
+          const titlePrompt = `Summarize this user prompt into a short, concise chat title (max 4 words). Do not use quotes or prefixes. Prompt: "${message}"`;
+          const titleResponse = await titleModel.invoke(titlePrompt);
+          let rawTitle = titleResponse.content.toString().replace(/["']/g, '').trim();
+          if (rawTitle.length > 50) rawTitle = rawTitle.substring(0, 50);
+          
+          await supabase.from('chat_sessions').update({ title: rawTitle }).eq('id', sessionId);
+        } catch (e) {
+          console.error("Failed to cleanly auto-generate chat title:", e);
         }
-      );
-      const data = await response.json();
-      if (!data.embedding?.values) throw new Error("Embedding generation failed");
-      return data.embedding.values.slice(0, 768);
+      })();
+    }
+
+    // 1. Generate Embedding for the user query natively
+    if (!extractorInstance) {
+      console.log("Loading Xenova/nomic-embed-text for query...");
+      extractorInstance = await pipeline('feature-extraction', 'nomic-ai/nomic-embed-text-v1.5', { quantized: true });
     }
     
-    const queryEmbedding = await getGeminiEmbedding(message);
+    console.log("Generating local query embedding...");
+    const output = await extractorInstance(message, { pooling: 'mean', normalize: true });
+    const queryEmbedding = Array.from(output.data.subarray(0, 768)) as number[];
 
     // 2. Perform similarity search via edge function or direct DB query
     // Supabase RPC match_gns212_documents
@@ -67,13 +85,16 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Failed to search documents' }, { status: 500 });
     }
 
-    // 3. Format Context
     let contextText = '';
     if (documents && documents.length > 0) {
       contextText = documents
         .map((doc: any) => `[Page ${doc.metadata?.page || 'Unknown'}]: ${doc.content}`)
         .join('\n\n');
     }
+    
+    console.log('--- EXTRACTED CONTEXT ---');
+    console.log(contextText);
+    console.log('--- END EXTRACTED CONTEXT ---');
 
     // 4. Invoke LLM and construct Prompt
     const model = new ChatGoogleGenerativeAI({

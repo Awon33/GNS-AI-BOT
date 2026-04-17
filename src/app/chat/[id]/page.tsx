@@ -1,6 +1,6 @@
 import { createClient } from '@/utils/supabase/server';
 import { redirect } from 'next/navigation';
-import { Sidebar } from '@/components/Sidebar';
+import { AppLayout } from '@/components/AppLayout';
 import { ChatWindow } from '@/components/ChatWindow';
 
 export default async function ChatPage({ params }: { params: Promise<{ id: string }> }) {
@@ -33,20 +33,12 @@ export default async function ChatPage({ params }: { params: Promise<{ id: strin
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-slate-950">
-      <Sidebar sessions={sessions || []} userId={user.id} />
-      
-      <main className="flex-1 flex flex-col relative h-full">
-        {/* Decorative background */}
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_bottom_right,_var(--tw-gradient-stops))] from-indigo-900/10 via-slate-950 to-slate-950 -z-10" />
-        
-        {/* Pass the server messages to client Chat component */}
-        <ChatWindow 
-          sessionId={id} 
-          userId={user.id} 
-          initialMessages={messages || []} 
-        />
-      </main>
-    </div>
+    <AppLayout sessions={sessions || []} userId={user.id}>
+      <ChatWindow 
+        sessionId={id} 
+        userId={user.id} 
+        initialMessages={messages || []} 
+      />
+    </AppLayout>
   );
 }

@@ -6,11 +6,12 @@ This project was built to empower students with rapid context retrieval using an
 
 ## Features
 
-- **Strict Knowledge Retrieval (RAG):** The AI answers *only* from the provided course material (PDF). It refuses to hallucinate facts outside the textbook.
-- **Accurate Citations:** Provides `[Page X]` page-level citations for the extracted context so you can cross-reference the actual book.
-- **Modern User Interface:** Built with Tailwind CSS and `shadcn/ui` for a sleek, responsive, dark-mode-first chat experience.
-- **Zero-Cost Deployment:** Operates on the free tiers of Vercel, Supabase (PostgreSQL + pgvector), and Google's Gemini API.
-- **Fast Similarity Search:** Powered by Supabase `pgvector` for hyper-fast semantic nearest-neighbor searches.
+- **Custom-Trained Local Knowledge**: Only answers using exact text from the provided GNS 212 material. Refuses to hallucinate external knowledge.
+- **Infinite Vector Embeddings**: Ingests textbook PDFs offline using '@xenova/transformers' `nomic-embed-text`, allowing zero-cost ingestion forever without Gemini API token rate limits!
+- **Zero Hallucination with Precise Citations**: Appends strict [Page X] exact-page citations for every piece of information presented.
+- **Dynamic Session Management**: Seamlessly creates, auto-names, renames, and manages individual chat sessions identically to ChatGPT using dropdown interfaces.
+- **Universal Mobile Layouts**: Fully responsive interface using `AppLayout` equipped with animating Shadcn Hamburger Drawers and Light/Dark Mode CSS Theming constraints.
+- **Instant Magic Auto-Naming**: Secretly queries Gemini's ultra-fast Flash 2.5 model in the background on your very first query to intelligently label your sidebar chat! hyper-fast semantic nearest-neighbor searches.
 
 ## Technology Stack
 

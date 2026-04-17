@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# User Data & PDFs
+*.pdf
+gns212_textbook.pdf

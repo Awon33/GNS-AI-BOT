@@ -1,10 +1,10 @@
-# 📚 GNS 212 AI Teaching Assistant
+# GNS 212 AI Teaching Assistant
 
 A **Zero-Cost Architecture** RAG (Retrieval-Augmented Generation) AI assistant designed to answer student questions based strictly on the provided course textbook, and cite exact page numbers for every response. 
 
 This project was built to empower students with rapid context retrieval using an entirely free deployment stack.
 
-## ✨ Features
+## Features
 
 - **Strict Knowledge Retrieval (RAG):** The AI answers *only* from the provided course material (PDF). It refuses to hallucinate facts outside the textbook.
 - **Accurate Citations:** Provides `[Page X]` page-level citations for the extracted context so you can cross-reference the actual book.
@@ -12,7 +12,7 @@ This project was built to empower students with rapid context retrieval using an
 - **Zero-Cost Deployment:** Operates on the free tiers of Vercel, Supabase (PostgreSQL + pgvector), and Google's Gemini API.
 - **Fast Similarity Search:** Powered by Supabase `pgvector` for hyper-fast semantic nearest-neighbor searches.
 
-## 🛠️ Technology Stack
+## Technology Stack
 
 1. **Frontend & Backend:** Next.js 15 (App Router), React, TypeScript.
 2. **Database & Auth:** Supabase (PostgreSQL, `pgvector` extension)
@@ -20,7 +20,7 @@ This project was built to empower students with rapid context retrieval using an
 4. **Embeddings:** Google Gemini Embeddings (`gemini-embedding-001` with 768-D slice optimization)
 5. **RAG Framework:** Custom pipeline combining LangChain.js (`@langchain/google-genai`, `@langchain/textsplitters`) with native Fetch streams.
 
-## 🚀 Local Developer Setup
+## Local Developer Setup
 
 ### 1. Prerequisites
 
@@ -31,8 +31,8 @@ This project was built to empower students with rapid context retrieval using an
 ### 2. Clone and Install Dependencies
 
 ```bash
-git clone <your-repository-url>
-cd project-gns
+git clone https://github.com/Awon33/GNS-AI-BOT.git
+cd GNS-AI-BOT
 npm install --legacy-peer-deps
 ```
 *(Note: `--legacy-peer-deps` is recommended due to some LangChain and React 19 version mismatches.)*
@@ -73,7 +73,7 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) in your browser. The application requires basic signup/login authentication (managed automatically via Supabase) before users can query the chatbot.
 
-## 🤝 Contributing & License
+## Contributing & License
 
 This project was built specifically for students studying GNS 212 but can easily be repurposed for other course materials. Contributions and pull requests are welcome. 
 

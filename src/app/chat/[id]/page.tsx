@@ -13,18 +13,18 @@ export default async function ChatPage({ params }: { params: Promise<{ id: strin
     redirect('/login');
   }
 
-  // Fetch all chat sessions for the sidebar
-  const { data: sessions } = await supabase
-    .from('chat_sessions')
-    .select('*')
-    .order('created_at', { ascending: false });
-
-  // Fetch current session messages using promise structure for db row
-  const { data: messages } = await supabase
-    .from('messages')
-    .select('*')
-    .eq('session_id', id)
-    .order('created_at', { ascending: true });
+  // Fetch sessions and messages IN PARALLEL (much faster than sequential)
+  const [{ data: sessions }, { data: messages }] = await Promise.all([
+    supabase
+      .from('chat_sessions')
+      .select('*')
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('messages')
+      .select('*')
+      .eq('session_id', id)
+      .order('created_at', { ascending: true }),
+  ]);
 
   // Make sure session belongs to user
   const currentSession = sessions?.find(s => s.id === id);

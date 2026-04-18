@@ -8,6 +8,12 @@ import { IterableReadableStream } from '@langchain/core/utils/stream';
 // Suppress the console warning from LangChain
 process.env.LANGCHAIN_TRACING_V2 = 'false';
 
+// Cache the embeddings instance globally (persists across requests in the same serverless instance)
+const cachedEmbeddings = new GoogleGenerativeAIEmbeddings({
+  apiKey: process.env.GEMINI_API_KEY!,
+  modelName: "gemini-embedding-001",
+});
+
 // Helper function to convert Langchain IterableStream to standard Web ReadableStream
 function langChainStreamToReadableStream(stream: IterableReadableStream<any>) {
   const encoder = new TextEncoder();
@@ -42,7 +48,7 @@ export async function POST(req: Request) {
         try {
           const titleModel = new ChatGoogleGenerativeAI({
             apiKey: process.env.GEMINI_API_KEY,
-            model: "gemini-2.5-flash", 
+            model: "gemini-2.0-flash-lite", // Fastest model — perfect for a simple title
             temperature: 0.3,
           });
           const titlePrompt = `Summarize this user prompt into a short, concise chat title (max 4 words). Do not use quotes or prefixes. Prompt: "${message}"`;
@@ -58,12 +64,7 @@ export async function POST(req: Request) {
     }
 
     // 1. Generate query embedding via Gemini API (single call — no rate limit risk)
-    const embeddings = new GoogleGenerativeAIEmbeddings({
-      apiKey: process.env.GEMINI_API_KEY,
-      modelName: "gemini-embedding-001",
-    });
-
-    const queryEmbedding = await embeddings.embedQuery(message);
+    const queryEmbedding = await cachedEmbeddings.embedQuery(message);
     // Slice to 768 dimensions to match the DB vectors
     const queryEmbedding768 = queryEmbedding.slice(0, 768);
 
@@ -85,29 +86,42 @@ export async function POST(req: Request) {
         .join('\n\n');
     }
     
-    console.log('--- EXTRACTED CONTEXT ---');
-    console.log(contextText);
-    console.log('--- END EXTRACTED CONTEXT ---');
-
-    // 3. Invoke LLM and construct Prompt
+    // 3. Invoke LLM — using gemini-2.0-flash (much faster than 2.5-flash which has a thinking delay)
     const model = new ChatGoogleGenerativeAI({
       apiKey: process.env.GEMINI_API_KEY,
       model: "gemini-2.5-flash", 
-      temperature: 0.1, // Keep it objective for teaching
+      temperature: 0.3, // Balanced: accurate but conversational
       streaming: true,
     });
 
     const SYSTEM_PROMPT = `
-You are a helpful teaching assistant for the course GNS 212. 
-Answer the student's query using ONLY the provided context below.
-If the context does not contain the answer, reply exactly with: "I cannot find this in the textbook." 
-For every piece of information you provide, you MUST cite the source using the page number from the metadata. 
-Format your citation at the end of the sentence as [Page X].
+You are a knowledgeable and friendly teaching assistant for the university course GNS 212 (Nigerian Peoples and Culture, or the relevant GNS course this textbook covers).
 
-Context:
+Your job is to help students learn and understand the course material deeply. Follow this priority system:
+
+**TIER 1 — Textbook Context (Highest Priority):**
+When the provided context below contains relevant information, use it as your PRIMARY source. 
+You MUST cite every piece of textbook information with [Page X] at the end of the sentence.
+
+**TIER 2 — Related Academic Knowledge:**
+If the student asks something related to the course subject area (Nigerian history, culture, governance, geography, ethnic groups, national development, etc.) but the provided context doesn't directly answer it, you MAY use your general knowledge to give a helpful academic answer. 
+However, you must clearly indicate this by prefacing with: "While this isn't directly covered in your textbook, here's what I can share:" 
+Do NOT fabricate page citations for information not from the context.
+
+**TIER 3 — Off-Topic:**
+If the question is completely unrelated to the course or its subject area (e.g., coding, weather, sports), politely redirect: 
+"That's outside the scope of GNS 212. I'm here to help you with your coursework — feel free to ask me anything related to the course!"
+
+**Style guidelines:**
+- Be warm, encouraging, and conversational — like a helpful senior student, not a robot.
+- Use clear formatting: bullet points, bold key terms, and numbered lists where helpful.
+- When the textbook context is available, always ground your answer in it first, then expand if needed.
+- Keep answers focused and educational.
+
+Context from textbook:
 {context}
 
-Question:
+Student's question:
 {question}
 `;
 

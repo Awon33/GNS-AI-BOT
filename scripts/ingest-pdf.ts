@@ -1,8 +1,5 @@
 import * as dotenv from 'dotenv';
 dotenv.config({ path: '.env.local' });
-import { pipeline, env } from '@xenova/transformers';
-// Explicitly disable local models to force HF Hub download for the 768D model
-env.allowLocalModels = false;
 
 import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
@@ -16,28 +13,44 @@ const GOOGLE_API_KEY = process.env.GEMINI_API_KEY!;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_PRIVATE_KEY);
 
-let extractorInstance: any = null;
-async function getLocalEmbeddingBatch(texts: string[]): Promise<number[][]> {
-  if (!extractorInstance) {
-    console.log("Loading Xenova/nomic-embed-text-v1.5 model... (may take a minute the first time)");
-    extractorInstance = await pipeline('feature-extraction', 'nomic-ai/nomic-embed-text-v1.5', { quantized: true });
-  }
+// Gemini embeddings instance (768D slice)
+const embeddings = new GoogleGenerativeAIEmbeddings({
+  apiKey: GOOGLE_API_KEY,
+  modelName: "gemini-embedding-001",
+});
 
-  // Feature extraction output is a tensor, we use pooling and normalization automatically mapped
-  const output = await extractorInstance(texts, { pooling: 'mean', normalize: true });
-  
-  // output is a tensor, we must extract the float32 arrays
-  // shape is [batch_size, 768]
-  const embeddings: number[][] = [];
-  const batchSize = texts.length;
-  const dim = 768; // nomic outputs 768
-  
-  for (let i = 0; i < batchSize; i++) {
-    const chunkArray = Array.from(output.data.subarray(i * dim, (i + 1) * dim)) as number[];
-    embeddings.push(chunkArray);
-  }
+// Helper: sleep for N ms
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
-  return embeddings;
+// Helper: embed a single text with retry logic for rate limits
+async function embedSingleWithRetry(text: string, maxRetries = 5): Promise<number[] | null> {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const rawEmbedding = await embeddings.embedQuery(text);
+      const sliced = rawEmbedding.slice(0, 768);
+      
+      // Validate: must have actual dimensions
+      if (!sliced || sliced.length === 0) {
+        console.warn(`  ⚠ Empty embedding returned, skipping this chunk.`);
+        return null;
+      }
+      return sliced;
+    } catch (err: any) {
+      const status = err?.status || err?.response?.status;
+      if (status === 429) {
+        const waitTime = Math.min(15000 * (attempt + 1), 65000);
+        console.log(`  [HTTP 429] Rate limited. Waiting ${waitTime / 1000}s before retry ${attempt + 1}/${maxRetries}...`);
+        await sleep(waitTime);
+      } else {
+        console.error(`  ✗ Embedding error (non-429):`, err?.message || err);
+        return null; // Skip this chunk rather than crashing
+      }
+    }
+  }
+  console.warn(`  ⚠ Max retries exceeded, skipping chunk.`);
+  return null;
 }
 
 async function main() {
@@ -90,34 +103,61 @@ async function main() {
     allChunks.push(...splitChunks);
   }
 
-  console.log(`Generated ${allChunks.length} chunks. Generating embeddings and uploading to Supabase...`);
+  // Filter out chunks that are too short to produce meaningful embeddings
+  const MIN_CHUNK_LENGTH = 20;
+  const validChunks = allChunks.filter(c => c.pageContent.trim().length >= MIN_CHUNK_LENGTH);
+  const skippedCount = allChunks.length - validChunks.length;
 
-  // Batch insert to avoid hitting payload or rate limits
-  const BATCH_SIZE = 50;
-  for (let i = 0; i < allChunks.length; i += BATCH_SIZE) {
-    const batch = allChunks.slice(i, i + BATCH_SIZE);
+  console.log(`Generated ${allChunks.length} chunks total.`);
+  if (skippedCount > 0) {
+    console.log(`Filtered out ${skippedCount} chunks (< ${MIN_CHUNK_LENGTH} chars).`);
+  }
+  console.log(`Embedding ${validChunks.length} valid chunks using Gemini API...`);
+  console.log(`Processing one at a time with 1s delay to stay under free tier limits.\n`);
 
-    // Generate embeddings locally!
-    console.log(`Processing batch ${i / BATCH_SIZE + 1} locally...`);
-    const batchTexts = batch.map((doc) => doc.pageContent);
-    const batchEmbeddings = await getLocalEmbeddingBatch(batchTexts);
+  let successCount = 0;
+  let skipCount = 0;
 
-    const rowsToInsert = batch.map((doc, idx) => ({
-      content: doc.pageContent,
-      metadata: doc.metadata,
-      embedding: batchEmbeddings[idx],
-    }));
+  for (let i = 0; i < validChunks.length; i++) {
+    const chunk = validChunks[i];
+    const progress = `[${i + 1}/${validChunks.length}]`;
 
-    const { error } = await supabase.from('gns212_documents').insert(rowsToInsert);
-    if (error) {
-      console.error(`Error inserting batch ${i / BATCH_SIZE + 1}:`, error);
-    } else {
-      console.log(`Inserted batch ${i / BATCH_SIZE + 1} / ${Math.ceil(allChunks.length / BATCH_SIZE)}`);
+    // Generate embedding (one at a time to avoid batch failures)
+    const embedding = await embedSingleWithRetry(chunk.pageContent);
+
+    if (!embedding) {
+      console.log(`${progress} ⚠ Skipped (empty/failed embedding) — Page ${chunk.metadata?.page}`);
+      skipCount++;
+      await sleep(1000);
+      continue;
     }
 
+    // Insert one row at a time so a single failure doesn't lose a whole batch
+    const { error } = await supabase.from('gns212_documents').insert({
+      content: chunk.pageContent,
+      metadata: chunk.metadata,
+      embedding: embedding,
+    });
+
+    if (error) {
+      console.error(`${progress} ✗ Insert error:`, error.message);
+      skipCount++;
+    } else {
+      successCount++;
+      if (successCount % 25 === 0 || i === validChunks.length - 1) {
+        console.log(`${progress} ✓ ${successCount} inserted so far...`);
+      }
+    }
+
+    // 1-second delay between each API call (~60 RPM, well under limits)
+    if (i < validChunks.length - 1) {
+      await sleep(1000);
+    }
   }
 
-  console.log("Ingestion complete!");
+  console.log(`\n✅ Ingestion complete!`);
+  console.log(`   Inserted: ${successCount}`);
+  console.log(`   Skipped:  ${skipCount}`);
 }
 
 main().catch(console.error);

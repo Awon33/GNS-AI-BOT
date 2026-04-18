@@ -4,9 +4,6 @@ import { GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI } from '@langchain
 import { PromptTemplate } from '@langchain/core/prompts';
 import { StringOutputParser } from '@langchain/core/output_parsers';
 import { IterableReadableStream } from '@langchain/core/utils/stream';
-import { pipeline, env } from '@xenova/transformers';
-
-env.allowLocalModels = false; // Always use HF Hub
 
 // Suppress the console warning from LangChain
 process.env.LANGCHAIN_TRACING_V2 = 'false';
@@ -27,9 +24,6 @@ function langChainStreamToReadableStream(stream: IterableReadableStream<any>) {
     },
   });
 }
-
-// We lazily load the extractor globally to persist across requests during dev
-let extractorInstance: any = null;
 
 export async function POST(req: Request) {
   try {
@@ -63,20 +57,19 @@ export async function POST(req: Request) {
       })();
     }
 
-    // 1. Generate Embedding for the user query natively
-    if (!extractorInstance) {
-      console.log("Loading Xenova/nomic-embed-text for query...");
-      extractorInstance = await pipeline('feature-extraction', 'nomic-ai/nomic-embed-text-v1.5', { quantized: true });
-    }
-    
-    console.log("Generating local query embedding...");
-    const output = await extractorInstance(message, { pooling: 'mean', normalize: true });
-    const queryEmbedding = Array.from(output.data.subarray(0, 768)) as number[];
+    // 1. Generate query embedding via Gemini API (single call — no rate limit risk)
+    const embeddings = new GoogleGenerativeAIEmbeddings({
+      apiKey: process.env.GEMINI_API_KEY,
+      modelName: "gemini-embedding-001",
+    });
 
-    // 2. Perform similarity search via edge function or direct DB query
-    // Supabase RPC match_gns212_documents
+    const queryEmbedding = await embeddings.embedQuery(message);
+    // Slice to 768 dimensions to match the DB vectors
+    const queryEmbedding768 = queryEmbedding.slice(0, 768);
+
+    // 2. Perform similarity search via Supabase RPC
     const { data: documents, error: matchError } = await supabase.rpc('match_gns212_documents', {
-      query_embedding: queryEmbedding,
+      query_embedding: queryEmbedding768,
       match_count: 5,
     });
 
@@ -96,7 +89,7 @@ export async function POST(req: Request) {
     console.log(contextText);
     console.log('--- END EXTRACTED CONTEXT ---');
 
-    // 4. Invoke LLM and construct Prompt
+    // 3. Invoke LLM and construct Prompt
     const model = new ChatGoogleGenerativeAI({
       apiKey: process.env.GEMINI_API_KEY,
       model: "gemini-2.5-flash", 

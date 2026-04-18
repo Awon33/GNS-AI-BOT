@@ -14,7 +14,7 @@ export function AppLayout({ sessions, userId, children }: { sessions: any[], use
     <div className="flex h-screen overflow-hidden bg-background">
 
       {/* Desktop Sidebar */}
-      <div className="hidden md:block h-full shrink-0 w-80">
+      <div className="hidden md:block h-full shrink-0 w-70">
         <Sidebar sessions={sessions} userId={userId} />
       </div>
 

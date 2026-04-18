@@ -7,7 +7,7 @@ This project was built to empower students with rapid context retrieval using an
 ## Features
 
 - **Custom-Trained Local Knowledge**: Only answers using exact text from the provided GNS 212 material. Refuses to hallucinate external knowledge.
-- **Infinite Vector Embeddings**: Ingests textbook PDFs offline using '@xenova/transformers' `nomic-embed-text`, allowing zero-cost ingestion forever without Gemini API token rate limits!
+- **Rate-Limit-Safe Embeddings**: Ingests textbook PDFs using Google Gemini Embeddings (`gemini-embedding-001`) with intelligent batching (5 chunks/batch, 4s delays, exponential backoff on 429s) to stay under free tier limits.
 - **Zero Hallucination with Precise Citations**: Appends strict [Page X] exact-page citations for every piece of information presented.
 - **Dynamic Session Management**: Seamlessly creates, auto-names, renames, and manages individual chat sessions identically to ChatGPT using dropdown interfaces.
 - **Universal Mobile Layouts**: Fully responsive interface using `AppLayout` equipped with animating Shadcn Hamburger Drawers and Light/Dark Mode CSS Theming constraints.
@@ -18,8 +18,8 @@ This project was built to empower students with rapid context retrieval using an
 1. **Frontend & Backend:** Next.js 15 (App Router), React, TypeScript.
 2. **Database & Auth:** Supabase (PostgreSQL, `pgvector` extension)
 3. **AI Provider (LLM):** Google Gemini (`gemini-2.5-flash` for chatting)
-4. **Embeddings:** `@xenova/transformers` — runs `nomic-ai/nomic-embed-text-v1.5` **100% locally** via ONNX Runtime (768-D vectors). Zero API calls, zero rate limits.
-5. **RAG Framework:** Custom pipeline combining LangChain.js (`@langchain/google-genai`, `@langchain/textsplitters`) with native Fetch streams and local Transformers.js embedding.
+4. **Embeddings:** Google Gemini Embeddings (`gemini-embedding-001`, 768-D vectors) — used for both ingestion and query. Rate-limit-safe batching ensures free tier compatibility.
+5. **RAG Framework:** Custom pipeline combining LangChain.js (`@langchain/google-genai`, `@langchain/textsplitters`) with native Fetch streams. Fully deployable on Vercel Serverless Functions.
 
 ## Local Developer Setup
 
@@ -62,7 +62,7 @@ Drop your textbook (e.g. `gns212_textbook.pdf`) into the root of the project. Th
 ```bash
 npx tsx scripts/ingest-pdf.ts gns212_textbook.pdf
 ```
-*The script extracts pages, chunks the text, and generates 768-D embeddings locally using `@xenova/transformers` (Nomic-embed-text). No API calls are made — it runs at native CPU speed with zero rate limits.*
+*The script extracts pages, chunks the text, generates 768-D embeddings via Gemini API with rate-limit-safe batching (5 chunks/batch, 4s delays), and inserts them into your Supabase vector store. For ~272 chunks this takes ~5 minutes.*
 
 ### 6. Run the Development Server
 
